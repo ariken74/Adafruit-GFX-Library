@@ -9,9 +9,6 @@
 #endif
 #include "gfxfont.h"
 
-#include <Adafruit_I2CDevice.h>
-#include <Adafruit_SPIDevice.h>
-
 /// A generic graphics superclass that can handle all sorts of drawing. At a
 /// minimum you can subclass and provide drawPixel(). At a maximum you can do a
 /// ton of overriding to optimize. Used for any/all Adafruit displays!
@@ -36,12 +33,10 @@ public:
   // optimized code.  Otherwise 'generic' versions are used.
   virtual void startWrite(void);
   virtual void writePixel(int16_t x, int16_t y, uint16_t color);
-  virtual void writeFillRect(int16_t x, int16_t y, int16_t w, int16_t h,
-                             uint16_t color);
+  virtual void writeFillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
   virtual void writeFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   virtual void writeFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
-  virtual void writeLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
-                         uint16_t color);
+  virtual void writeLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
   virtual void endWrite(void);
 
   // CONTROL API
@@ -57,69 +52,58 @@ public:
   // It's good to implement those, even if using transaction API
   virtual void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   virtual void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
-  virtual void fillRect(int16_t x, int16_t y, int16_t w, int16_t h,
-                        uint16_t color);
+  virtual void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
   virtual void fillScreen(uint16_t color);
   // Optional and probably not necessary to change
-  virtual void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
-                        uint16_t color);
-  virtual void drawRect(int16_t x, int16_t y, int16_t w, int16_t h,
-                        uint16_t color);
+  virtual void drawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, uint16_t color);
+  virtual void drawRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
 
   // These exist only with Adafruit_GFX (no subclass overrides)
   void drawCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
-  void drawCircleHelper(int16_t x0, int16_t y0, int16_t r, uint8_t cornername,
-                        uint16_t color);
+  void drawCircleHelper(int16_t x0, int16_t y0, int16_t r, uint8_t cornername, uint16_t color);
   void fillCircle(int16_t x0, int16_t y0, int16_t r, uint16_t color);
-  void fillCircleHelper(int16_t x0, int16_t y0, int16_t r, uint8_t cornername,
-                        int16_t delta, uint16_t color);
-  void drawTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2,
-                    int16_t y2, uint16_t color);
-  void fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2,
-                    int16_t y2, uint16_t color);
-  void drawRoundRect(int16_t x0, int16_t y0, int16_t w, int16_t h,
-                     int16_t radius, uint16_t color);
-  void fillRoundRect(int16_t x0, int16_t y0, int16_t w, int16_t h,
-                     int16_t radius, uint16_t color);
-  void drawBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w,
-                  int16_t h, uint16_t color);
-  void drawBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w,
-                  int16_t h, uint16_t color, uint16_t bg);
-  void drawBitmap(int16_t x, int16_t y, uint8_t *bitmap, int16_t w, int16_t h,
+  void fillCircleHelper(int16_t x0, int16_t y0, int16_t r, uint8_t cornername, int16_t delta,
+                        uint16_t color);
+  void drawTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2,
+                    uint16_t color);
+  void fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1, int16_t x2, int16_t y2,
+                    uint16_t color);
+  void drawRoundRect(int16_t x0, int16_t y0, int16_t w, int16_t h, int16_t radius, uint16_t color);
+  void fillRoundRect(int16_t x0, int16_t y0, int16_t w, int16_t h, int16_t radius, uint16_t color);
+  void drawBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w, int16_t h,
                   uint16_t color);
-  void drawBitmap(int16_t x, int16_t y, uint8_t *bitmap, int16_t w, int16_t h,
+  void drawBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w, int16_t h,
                   uint16_t color, uint16_t bg);
-  void drawXBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w,
-                   int16_t h, uint16_t color);
-  void drawGrayscaleBitmap(int16_t x, int16_t y, const uint8_t bitmap[],
+  void drawBitmap(int16_t x, int16_t y, uint8_t* bitmap, int16_t w, int16_t h, uint16_t color);
+  void drawBitmap(int16_t x, int16_t y, uint8_t* bitmap, int16_t w, int16_t h, uint16_t color,
+                  uint16_t bg);
+  void drawXBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w, int16_t h,
+                   uint16_t color);
+  void drawGrayscaleBitmap(int16_t x, int16_t y, const uint8_t bitmap[], int16_t w, int16_t h);
+  void drawGrayscaleBitmap(int16_t x, int16_t y, uint8_t* bitmap, int16_t w, int16_t h);
+  void drawGrayscaleBitmap(int16_t x, int16_t y, const uint8_t bitmap[], const uint8_t mask[],
                            int16_t w, int16_t h);
-  void drawGrayscaleBitmap(int16_t x, int16_t y, uint8_t *bitmap, int16_t w,
+  void drawGrayscaleBitmap(int16_t x, int16_t y, uint8_t* bitmap, uint8_t* mask, int16_t w,
                            int16_t h);
-  void drawGrayscaleBitmap(int16_t x, int16_t y, const uint8_t bitmap[],
-                           const uint8_t mask[], int16_t w, int16_t h);
-  void drawGrayscaleBitmap(int16_t x, int16_t y, uint8_t *bitmap, uint8_t *mask,
-                           int16_t w, int16_t h);
-  void drawRGBBitmap(int16_t x, int16_t y, const uint16_t bitmap[], int16_t w,
+  void drawRGBBitmap(int16_t x, int16_t y, const uint16_t bitmap[], int16_t w, int16_t h);
+  void drawRGBBitmap(int16_t x, int16_t y, uint16_t* bitmap, int16_t w, int16_t h);
+  void drawRGBBitmap(int16_t x, int16_t y, uint16_t* bitmap, int16_t w, int16_t h, int16_t x_offset,
+                     int16_t y_offset);
+  void drawRGBBitmap(int16_t x, int16_t y, const uint16_t bitmap[], const uint8_t mask[], int16_t w,
                      int16_t h);
-  void drawRGBBitmap(int16_t x, int16_t y, uint16_t *bitmap, int16_t w,
-                     int16_t h);
-  void drawRGBBitmap(int16_t x, int16_t y, const uint16_t bitmap[],
-                     const uint8_t mask[], int16_t w, int16_t h);
-  void drawRGBBitmap(int16_t x, int16_t y, uint16_t *bitmap, uint8_t *mask,
-                     int16_t w, int16_t h);
-  void drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color,
-                uint16_t bg, uint8_t size);
-  void drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color,
-                uint16_t bg, uint8_t size_x, uint8_t size_y);
-  void getTextBounds(const char *string, int16_t x, int16_t y, int16_t *x1,
-                     int16_t *y1, uint16_t *w, uint16_t *h);
-  void getTextBounds(const __FlashStringHelper *s, int16_t x, int16_t y,
-                     int16_t *x1, int16_t *y1, uint16_t *w, uint16_t *h);
-  void getTextBounds(const String &str, int16_t x, int16_t y, int16_t *x1,
-                     int16_t *y1, uint16_t *w, uint16_t *h);
+  void drawRGBBitmap(int16_t x, int16_t y, uint16_t* bitmap, uint8_t* mask, int16_t w, int16_t h);
+  void drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color, uint16_t bg, uint8_t size);
+  void drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color, uint16_t bg, uint8_t size_x,
+                uint8_t size_y);
+  void getTextBounds(const char* string, int16_t x, int16_t y, int16_t* x1, int16_t* y1,
+                     uint16_t* w, uint16_t* h);
+  void getTextBounds(const __FlashStringHelper* s, int16_t x, int16_t y, int16_t* x1, int16_t* y1,
+                     uint16_t* w, uint16_t* h);
+  void getTextBounds(const String& str, int16_t x, int16_t y, int16_t* x1, int16_t* y1, uint16_t* w,
+                     uint16_t* h);
   void setTextSize(uint8_t s);
   void setTextSize(uint8_t sx, uint8_t sy);
-  void setFont(const GFXfont *f = NULL);
+  void setFont(const GFXfont* f = NULL);
 
   /**********************************************************************/
   /*!
@@ -230,8 +214,8 @@ public:
   int16_t getCursorY(void) const { return cursor_y; };
 
 protected:
-  void charBounds(unsigned char c, int16_t *x, int16_t *y, int16_t *minx,
-                  int16_t *miny, int16_t *maxx, int16_t *maxy);
+  void charBounds(unsigned char c, int16_t* x, int16_t* y, int16_t* minx, int16_t* miny,
+                  int16_t* maxx, int16_t* maxy);
   int16_t WIDTH;        ///< This is the 'raw' display width - never changes
   int16_t HEIGHT;       ///< This is the 'raw' display height - never changes
   int16_t _width;       ///< Display width as modified by current rotation
@@ -245,7 +229,7 @@ protected:
   uint8_t rotation;     ///< Display rotation (0 thru 3)
   bool wrap;            ///< If set, 'wrap' text at right edge of display
   bool _cp437;          ///< If set, use correct CP437 charset (default is off)
-  GFXfont *gfxFont;     ///< Pointer to special font
+  GFXfont* gfxFont;     ///< Pointer to special font
 };
 
 /// A simple drawn button UI element
@@ -254,21 +238,18 @@ class Adafruit_GFX_Button {
 public:
   Adafruit_GFX_Button(void);
   // "Classic" initButton() uses center & size
-  void initButton(Adafruit_GFX *gfx, int16_t x, int16_t y, uint16_t w,
-                  uint16_t h, uint16_t outline, uint16_t fill,
-                  uint16_t textcolor, char *label, uint8_t textsize);
-  void initButton(Adafruit_GFX *gfx, int16_t x, int16_t y, uint16_t w,
-                  uint16_t h, uint16_t outline, uint16_t fill,
-                  uint16_t textcolor, char *label, uint8_t textsize_x,
+  void initButton(Adafruit_GFX* gfx, int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t outline,
+                  uint16_t fill, uint16_t textcolor, char* label, uint8_t textsize);
+  void initButton(Adafruit_GFX* gfx, int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t outline,
+                  uint16_t fill, uint16_t textcolor, char* label, uint8_t textsize_x,
                   uint8_t textsize_y);
   // New/alt initButton() uses upper-left corner & size
-  void initButtonUL(Adafruit_GFX *gfx, int16_t x1, int16_t y1, uint16_t w,
-                    uint16_t h, uint16_t outline, uint16_t fill,
-                    uint16_t textcolor, char *label, uint8_t textsize);
-  void initButtonUL(Adafruit_GFX *gfx, int16_t x1, int16_t y1, uint16_t w,
-                    uint16_t h, uint16_t outline, uint16_t fill,
-                    uint16_t textcolor, char *label, uint8_t textsize_x,
-                    uint8_t textsize_y);
+  void initButtonUL(Adafruit_GFX* gfx, int16_t x1, int16_t y1, uint16_t w, uint16_t h,
+                    uint16_t outline, uint16_t fill, uint16_t textcolor, char* label,
+                    uint8_t textsize);
+  void initButtonUL(Adafruit_GFX* gfx, int16_t x1, int16_t y1, uint16_t w, uint16_t h,
+                    uint16_t outline, uint16_t fill, uint16_t textcolor, char* label,
+                    uint8_t textsize_x, uint8_t textsize_y);
   void drawButton(bool inverted = false);
   bool contains(int16_t x, int16_t y);
 
@@ -295,7 +276,7 @@ public:
   bool isPressed(void) { return currstate; };
 
 private:
-  Adafruit_GFX *_gfx;
+  Adafruit_GFX* _gfx;
   int16_t _x1, _y1; // Coordinates of top-left corner
   uint16_t _w, _h;
   uint8_t _textsize_x;
@@ -313,6 +294,7 @@ public:
   ~GFXcanvas1(void);
   void drawPixel(int16_t x, int16_t y, uint16_t color);
   void fillScreen(uint16_t color);
+  void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) override;
   void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
   bool getPixel(int16_t x, int16_t y) const;
@@ -322,13 +304,15 @@ public:
     @returns  A pointer to the allocated buffer
   */
   /**********************************************************************/
-  uint8_t *getBuffer(void) const { return buffer; }
+  uint8_t* getBuffer(void) const { return buffer; }
+
+  uint8_t* getBufferRegion(int16_t x, int16_t y, int16_t w, int16_t h);
 
 protected:
   bool getRawPixel(int16_t x, int16_t y) const;
   void drawFastRawVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   void drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
-  uint8_t *buffer; ///< Raster data: no longer private, allow subclass access
+  uint8_t* buffer; ///< Raster data: no longer private, allow subclass access
 
 private:
 #ifdef __AVR__
@@ -353,13 +337,15 @@ public:
    @returns  A pointer to the allocated buffer
   */
   /**********************************************************************/
-  uint8_t *getBuffer(void) const { return buffer; }
+  uint8_t* getBuffer(void) const { return buffer; }
+
+  uint8_t* getBufferRegion(int16_t x, int16_t y, int16_t w, int16_t h);
 
 protected:
   uint8_t getRawPixel(int16_t x, int16_t y) const;
   void drawFastRawVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   void drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
-  uint8_t *buffer; ///< Raster data: no longer private, allow subclass access
+  uint8_t* buffer; ///< Raster data: no longer private, allow subclass access
 };
 
 ///  A GFX 16-bit canvas context for graphics
@@ -369,6 +355,7 @@ public:
   ~GFXcanvas16(void);
   void drawPixel(int16_t x, int16_t y, uint16_t color);
   void fillScreen(uint16_t color);
+  void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) override;
   void byteSwap(void);
   void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
@@ -379,13 +366,15 @@ public:
     @returns  A pointer to the allocated buffer
   */
   /**********************************************************************/
-  uint16_t *getBuffer(void) const { return buffer; }
+  uint16_t* getBuffer(void) const { return buffer; }
+
+  uint16_t* getBufferRegion(int16_t x, int16_t y, int16_t w, int16_t h);
 
 protected:
   uint16_t getRawPixel(int16_t x, int16_t y) const;
   void drawFastRawVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   void drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
-  uint16_t *buffer; ///< Raster data: no longer private, allow subclass access
+  uint16_t* buffer; ///< Raster data: no longer private, allow subclass access
 };
 
 #endif // _ADAFRUIT_GFX_H
