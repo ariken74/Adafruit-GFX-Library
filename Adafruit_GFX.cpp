@@ -33,10 +33,176 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "Adafruit_GFX.h"
 #include "glcdfont.c"
+#if defined(ESP_PLATFORM)
+#include "sdkconfig.h"
+#endif
 #ifdef __AVR__
 #include <avr/pgmspace.h>
 #elif defined(ESP8266) || defined(ESP32)
 #include <pgmspace.h>
+#endif
+
+#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_SOC_PPA_SUPPORTED)
+#if __has_include("driver/ppa.h")
+#include "driver/ppa.h"
+#include "esp_err.h"
+#if __has_include("esp_cache.h")
+#include "esp_cache.h"
+#endif
+#if __has_include("esp_heap_caps.h")
+#include "esp_heap_caps.h"
+#endif
+#include <stddef.h>
+#include <stdint.h>
+
+static ppa_client_handle_t gfx_ppa_fill_client = nullptr;
+static ppa_client_handle_t gfx_ppa_srm_client = nullptr;
+
+static inline uint32_t gfx_rgb565_to_argb8888(uint16_t color) {
+  uint8_t r = (color >> 11) & 0x1F;
+  uint8_t g = (color >> 5) & 0x3F;
+  uint8_t b = color & 0x1F;
+  r = (r << 3) | (r >> 2);
+  g = (g << 2) | (g >> 4);
+  b = (b << 3) | (b >> 2);
+  return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+}
+
+static inline bool gfx_ppa_fill_ready() {
+  if (gfx_ppa_fill_client) {
+    return true;
+  }
+  ppa_client_config_t cfg = {
+      .oper_type = PPA_OPERATION_FILL,
+      .max_pending_trans_num = 1,
+      .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+  };
+  return ppa_register_client(&cfg, &gfx_ppa_fill_client) == ESP_OK;
+}
+
+static inline bool gfx_ppa_srm_ready() {
+  if (gfx_ppa_srm_client) {
+    return true;
+  }
+  ppa_client_config_t cfg = {
+      .oper_type = PPA_OPERATION_SRM,
+      .max_pending_trans_num = 1,
+      .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+  };
+  return ppa_register_client(&cfg, &gfx_ppa_srm_client) == ESP_OK;
+}
+
+static inline bool gfx_ppa_buffer_aligned(const void* buf) {
+  return (((uintptr_t)buf & 0x3F) == 0);
+}
+
+static inline void gfx_ppa_cache_sync(const void* buf, size_t size, bool to_device) {
+#if __has_include("esp_cache.h") && __has_include("esp_heap_caps.h")
+  if (esp_ptr_external_ram(buf)) {
+    esp_cache_msync(const_cast<void*>(buf), size,
+                    to_device ? ESP_CACHE_MSYNC_FLAG_DIR_C2M : ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+  }
+#else
+  (void)buf;
+  (void)size;
+  (void)to_device;
+#endif
+}
+
+static inline bool gfx_ppa_fill_rgb565(uint16_t* buffer, uint32_t buf_w, uint32_t buf_h, int16_t x,
+                                       int16_t y, int16_t w, int16_t h, uint16_t color) {
+  if (!buffer || w <= 0 || h <= 0) {
+    return false;
+  }
+  if (!gfx_ppa_fill_ready() || !gfx_ppa_buffer_aligned(buffer)) {
+    return false;
+  }
+
+  size_t buffer_size = (size_t)buf_w * (size_t)buf_h * sizeof(uint16_t);
+  if (!gfx_ppa_buffer_aligned((void*)buffer_size)) { // Reusing macro for size check (mod 64 == 0)
+    return false;
+  }
+
+  ppa_fill_oper_config_t cfg = {};
+  cfg.fill_argb_color.val = gfx_rgb565_to_argb8888(color);
+  cfg.fill_block_w = (uint32_t)w;
+  cfg.fill_block_h = (uint32_t)h;
+  cfg.out.buffer = buffer;
+  cfg.out.buffer_size = (size_t)buf_w * (size_t)buf_h * sizeof(uint16_t);
+  cfg.out.pic_w = buf_w;
+  cfg.out.pic_h = buf_h;
+  cfg.out.block_offset_x = (uint32_t)x;
+  cfg.out.block_offset_y = (uint32_t)y;
+  cfg.out.fill_cm = PPA_FILL_COLOR_MODE_RGB565;
+  cfg.mode = PPA_TRANS_MODE_BLOCKING;
+  cfg.user_data = NULL;
+
+  return ppa_do_fill(gfx_ppa_fill_client, &cfg) == ESP_OK;
+}
+
+static inline bool gfx_ppa_blit_rgb565(uint16_t* dst, uint32_t dst_w, uint32_t dst_h, int16_t dst_x,
+                                       int16_t dst_y, const uint16_t* src, uint32_t src_w,
+                                       uint32_t src_h, int16_t src_x, int16_t src_y,
+                                       uint32_t blit_w, uint32_t blit_h) {
+  if (!dst || !src || blit_w == 0 || blit_h == 0) {
+    return false;
+  }
+  if (!gfx_ppa_srm_ready() || !gfx_ppa_buffer_aligned(dst) || !gfx_ppa_buffer_aligned(src)) {
+    return false;
+  }
+
+  const size_t src_bytes = (size_t)src_w * (size_t)src_h * sizeof(uint16_t);
+  const size_t dst_bytes = (size_t)dst_w * (size_t)dst_h * sizeof(uint16_t);
+
+  if (!gfx_ppa_buffer_aligned((void*)src_bytes) || !gfx_ppa_buffer_aligned((void*)dst_bytes)) {
+    return false;
+  }
+  gfx_ppa_cache_sync(src, src_bytes, true);
+
+  ppa_srm_oper_config_t cfg = {};
+  cfg.in.buffer = src;
+  cfg.in.pic_w = src_w;
+  cfg.in.pic_h = src_h;
+  cfg.in.block_w = blit_w;
+  cfg.in.block_h = blit_h;
+  cfg.in.block_offset_x = (uint32_t)src_x;
+  cfg.in.block_offset_y = (uint32_t)src_y;
+  cfg.in.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+
+  cfg.out.buffer = dst;
+  cfg.out.buffer_size = dst_bytes;
+  cfg.out.pic_w = dst_w;
+  cfg.out.pic_h = dst_h;
+  cfg.out.block_offset_x = (uint32_t)dst_x;
+  cfg.out.block_offset_y = (uint32_t)dst_y;
+  cfg.out.srm_cm = PPA_SRM_COLOR_MODE_RGB565;
+
+  cfg.rotation_angle = PPA_SRM_ROTATION_ANGLE_0;
+  cfg.scale_x = 1.0f;
+  cfg.scale_y = 1.0f;
+  cfg.mirror_x = false;
+  cfg.mirror_y = false;
+  cfg.rgb_swap = false;
+  cfg.byte_swap = false;
+  cfg.alpha_update_mode = PPA_ALPHA_NO_CHANGE;
+  cfg.alpha_fix_val = 0;
+  cfg.mode = PPA_TRANS_MODE_BLOCKING;
+  cfg.user_data = NULL;
+
+  esp_err_t err = ppa_do_scale_rotate_mirror(gfx_ppa_srm_client, &cfg);
+  if (err != ESP_OK) {
+    return false;
+  }
+
+  gfx_ppa_cache_sync(dst, dst_bytes, false);
+  return true;
+}
+#define GFX_PPA_AVAILABLE 1
+#else
+#define GFX_PPA_AVAILABLE 0
+#endif
+#else
+#define GFX_PPA_AVAILABLE 0
 #endif
 
 // Performance optimization: Enable compiler optimizations for ESP32
@@ -1780,14 +1946,15 @@ GFXcanvas1::~GFXcanvas1(void) {
 */
 /**************************************************************************/
 void GFXcanvas1::drawPixel(int16_t x, int16_t y, uint16_t color) {
-  if (!buffer) return;
-  
+  if (!buffer)
+    return;
+
   // Fast path for rotation 0 (most common case)
   if (rotation == 0) {
     if ((x >= 0) && (y >= 0) && (x < _width) && (y < _height)) {
       uint8_t* ptr = &buffer[(x >> 3) + y * ((WIDTH + 7) >> 3)];
       uint8_t bit_mask = 0x80 >> (x & 7);
-      
+
       if (color) {
         *ptr |= bit_mask;
       } else {
@@ -1796,7 +1963,7 @@ void GFXcanvas1::drawPixel(int16_t x, int16_t y, uint16_t color) {
     }
     return;
   }
-  
+
   // Bounds check before rotation transformation
   if ((x < 0) || (y < 0) || (x >= _width) || (y >= _height))
     return;
@@ -1849,7 +2016,7 @@ bool GFXcanvas1::getPixel(int16_t x, int16_t y) const {
   if (rotation == 0) {
     return getRawPixel(x, y);
   }
-  
+
   int16_t t;
   switch (rotation) {
   case 1:
@@ -1884,8 +2051,9 @@ bool GFXcanvas1::getPixel(int16_t x, int16_t y) const {
 bool GFXcanvas1::getRawPixel(int16_t x, int16_t y) const {
   if ((x < 0) || (y < 0) || (x >= WIDTH) || (y >= HEIGHT))
     return 0;
-  if (!buffer) return 0;
-  
+  if (!buffer)
+    return 0;
+
   uint8_t* ptr = &buffer[(x >> 3) + y * ((WIDTH + 7) >> 3)];
 
 #ifdef __AVR__
@@ -1902,22 +2070,23 @@ bool GFXcanvas1::getRawPixel(int16_t x, int16_t y) const {
 */
 /**************************************************************************/
 void GFXcanvas1::fillScreen(uint16_t color) {
-  if (!buffer) return;
-  
+  if (!buffer)
+    return;
+
   uint32_t bytes = ((WIDTH + 7) >> 3) * HEIGHT;
-  
+
 #if defined(ESP32)
   // ESP32 optimization: Use 32-bit writes when possible and aligned
   if (bytes >= 4 && ((uintptr_t)buffer & 3) == 0) {
     uint32_t fill_value = color ? 0xFFFFFFFF : 0x00000000;
     uint32_t* buffer32 = (uint32_t*)buffer;
     uint32_t words = bytes / 4;
-    
+
     // Fill in 32-bit chunks
     for (uint32_t i = 0; i < words; i++) {
       buffer32[i] = fill_value;
     }
-    
+
     // Handle remaining bytes
     uint32_t remaining = bytes & 3;
     if (remaining) {
@@ -1927,7 +2096,7 @@ void GFXcanvas1::fillScreen(uint16_t color) {
     return;
   }
 #endif
-  
+
   // Standard memset for unaligned or smaller buffers
   memset(buffer, color ? 0xFF : 0x00, bytes);
 }
@@ -1936,22 +2105,32 @@ void GFXcanvas1::fillScreen(uint16_t color) {
 /*!
     @brief  Fill a rectangle completely with one color. Override for canvas optimization.
     @param  x      Top left corner x coordinate
-    @param  y      Top left corner y coordinate  
+    @param  y      Top left corner y coordinate
     @param  w      Width in pixels
     @param  h      Height in pixels
     @param  color  Binary (on or off) color to fill with
 */
 /**************************************************************************/
 void GFXcanvas1::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
-  if (!buffer || w <= 0 || h <= 0) return;
-  
+  if (!buffer || w <= 0 || h <= 0)
+    return;
+
   // Clip rectangle to canvas bounds
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x + w > _width) w = _width - x;
-  if (y + h > _height) h = _height - y;
-  if (w <= 0 || h <= 0) return;
-  
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > _width)
+    w = _width - x;
+  if (y + h > _height)
+    h = _height - y;
+  if (w <= 0 || h <= 0)
+    return;
+
   // Handle rotation 0 efficiently (most common case)
   if (rotation == 0) {
     for (int16_t j = 0; j < h; j++) {
@@ -1959,7 +2138,7 @@ void GFXcanvas1::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t c
     }
     return;
   }
-  
+
   // Fallback to line-based drawing for rotated cases
   for (int16_t j = y; j < y + h; j++) {
     drawFastHLine(x, j, w, color);
@@ -2123,8 +2302,9 @@ void GFXcanvas1::drawFastRawVLine(int16_t x, int16_t y, int16_t h, uint16_t colo
 /**************************************************************************/
 void GFXcanvas1::drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
   // x & y already in raw (rotation 0) coordinates, no need to transform.
-  if (w <= 0) return;
-  
+  if (w <= 0)
+    return;
+
   int16_t rowBytes = ((WIDTH + 7) >> 3);
   uint8_t* ptr = &buffer[(x >> 3) + y * rowBytes];
   size_t remainingWidthBits = w;
@@ -2134,11 +2314,12 @@ void GFXcanvas1::drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t colo
     // Create bit mask for first byte using faster bit operations
     uint8_t startByteBitMask = 0x00;
     uint8_t start_bit = x & 7;
-    uint8_t bits_in_first_byte = (8 - start_bit < remainingWidthBits) ? 8 - start_bit : remainingWidthBits;
-    
+    uint8_t bits_in_first_byte =
+        (8 - start_bit < remainingWidthBits) ? 8 - start_bit : remainingWidthBits;
+
     // Create mask more efficiently
     startByteBitMask = (0xFF >> start_bit) & (0xFF << (8 - start_bit - bits_in_first_byte));
-    
+
     if (color > 0) {
       *ptr |= startByteBitMask;
     } else {
@@ -2151,8 +2332,8 @@ void GFXcanvas1::drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t colo
 
   // Do the next remainingWidthBits bits
   if (remainingWidthBits > 0) {
-    size_t remainingWholeBytes = remainingWidthBits >> 3;  // Faster than /8
-    size_t lastByteBits = remainingWidthBits & 7;          // Faster than %8
+    size_t remainingWholeBytes = remainingWidthBits >> 3; // Faster than /8
+    size_t lastByteBits = remainingWidthBits & 7;         // Faster than %8
     uint8_t wholeByteColor = color > 0 ? 0xFF : 0x00;
 
 #if defined(ESP32)
@@ -2161,11 +2342,11 @@ void GFXcanvas1::drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t colo
       uint32_t color32 = color > 0 ? 0xFFFFFFFF : 0x00000000;
       uint32_t* ptr32 = (uint32_t*)ptr;
       uint32_t words = remainingWholeBytes / 4;
-      
+
       for (uint32_t i = 0; i < words; i++) {
         ptr32[i] = color32;
       }
-      
+
       ptr += words * 4;
       remainingWholeBytes &= 3;
     }
@@ -2485,8 +2666,9 @@ GFXcanvas16::~GFXcanvas16(void) {
 */
 /**************************************************************************/
 void GFXcanvas16::drawPixel(int16_t x, int16_t y, uint16_t color) {
-  if (!buffer) return;
-  
+  if (!buffer)
+    return;
+
   // Fast path for rotation 0 (most common case)
   if (rotation == 0) {
     if ((x >= 0) && (y >= 0) && (x < _width) && (y < _height)) {
@@ -2494,7 +2676,7 @@ void GFXcanvas16::drawPixel(int16_t x, int16_t y, uint16_t color) {
     }
     return;
   }
-  
+
   // Bounds check before rotation transformation
   if ((x < 0) || (y < 0) || (x >= _width) || (y >= _height))
     return;
@@ -2533,7 +2715,7 @@ uint16_t GFXcanvas16::getPixel(int16_t x, int16_t y) const {
   if (rotation == 0) {
     return getRawPixel(x, y);
   }
-  
+
   int16_t t;
   switch (rotation) {
   case 1:
@@ -2580,22 +2762,29 @@ uint16_t GFXcanvas16::getRawPixel(int16_t x, int16_t y) const {
 */
 /**************************************************************************/
 void GFXcanvas16::fillScreen(uint16_t color) {
-  if (!buffer) return;
-  
+  if (!buffer)
+    return;
+
   uint32_t pixels = WIDTH * HEIGHT;
-  
+
+#if GFX_PPA_AVAILABLE
+  if (gfx_ppa_fill_rgb565(buffer, WIDTH, HEIGHT, 0, 0, WIDTH, HEIGHT, color)) {
+    return;
+  }
+#endif
+
 #if defined(ESP32)
   // ESP32 optimization: Use 32-bit writes when possible
   if (pixels >= 2 && ((uintptr_t)buffer & 3) == 0) {
     uint32_t color32 = (color << 16) | color;
     uint32_t* buffer32 = (uint32_t*)buffer;
     uint32_t words = pixels / 2;
-    
+
     // Fill in 32-bit chunks
     for (uint32_t i = 0; i < words; i++) {
       buffer32[i] = color32;
     }
-    
+
     // Handle odd pixel if necessary
     if (pixels & 1) {
       buffer[pixels - 1] = color;
@@ -2603,7 +2792,7 @@ void GFXcanvas16::fillScreen(uint16_t color) {
     return;
   }
 #endif
-  
+
   // Fallback: Check if we can use memset optimization
   uint8_t hi = color >> 8, lo = color & 0xFF;
   if (hi == lo) {
@@ -2630,31 +2819,46 @@ void GFXcanvas16::fillScreen(uint16_t color) {
 */
 /**************************************************************************/
 void GFXcanvas16::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) {
-  if (!buffer || w <= 0 || h <= 0) return;
-  
+  if (!buffer || w <= 0 || h <= 0)
+    return;
+
   // Clip rectangle to canvas bounds
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x + w > _width) w = _width - x;
-  if (y + h > _height) h = _height - y;
-  if (w <= 0 || h <= 0) return;
-  
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > _width)
+    w = _width - x;
+  if (y + h > _height)
+    h = _height - y;
+  if (w <= 0 || h <= 0)
+    return;
+
   // Handle rotation 0 efficiently (most common case)
   if (rotation == 0) {
+#if GFX_PPA_AVAILABLE
+    if (gfx_ppa_fill_rgb565(buffer, WIDTH, HEIGHT, x, y, w, h, color)) {
+      return;
+    }
+#endif
     for (int16_t j = 0; j < h; j++) {
       uint32_t buffer_index = (y + j) * WIDTH + x;
-      
+
 #if defined(ESP32)
       // ESP32 optimization: Use 32-bit writes for wider rectangles
       if (w >= 4 && ((buffer_index & 1) == 0)) {
         uint32_t color32 = (color << 16) | color;
         uint32_t* buffer32 = (uint32_t*)(buffer + buffer_index);
         uint32_t words = w / 2;
-        
+
         for (uint32_t i = 0; i < words; i++) {
           buffer32[i] = color32;
         }
-        
+
         if (w & 1) {
           buffer[buffer_index + w - 1] = color;
         }
@@ -2669,11 +2873,73 @@ void GFXcanvas16::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t 
     }
     return;
   }
-  
+
   // Fallback to line-based drawing for rotated cases
   for (int16_t j = y; j < y + h; j++) {
     drawFastHLine(x, j, w, color);
   }
+}
+
+void GFXcanvas16::drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w,
+                                int16_t h) {
+  if (!buffer || !bitmap || w <= 0 || h <= 0) {
+    return;
+  }
+
+  if (rotation == 0) {
+    if ((x >= 0) && (y >= 0) && ((x + w) <= WIDTH) && ((y + h) <= HEIGHT)) {
+#if GFX_PPA_AVAILABLE
+      if (gfx_ppa_blit_rgb565(buffer, WIDTH, HEIGHT, x, y, bitmap, w, h, 0, 0, (uint32_t)w,
+                              (uint32_t)h)) {
+        return;
+      }
+#endif
+    }
+  }
+
+  startWrite();
+  for (int16_t j = 0; j < h; j++, y++) {
+    for (int16_t i = 0; i < w; i++) {
+      writePixel(x + i, y, bitmap[j * w + i]);
+    }
+  }
+  endWrite();
+}
+
+void GFXcanvas16::drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w, int16_t h,
+                                int16_t x_offset, int16_t y_offset) {
+  if (!buffer || !bitmap || w <= 0 || h <= 0) {
+    return;
+  }
+
+  if (x_offset < 0)
+    x_offset = 0;
+  if (y_offset < 0)
+    y_offset = 0;
+  if (x_offset >= w || y_offset >= h)
+    return;
+
+  int16_t blit_w = w - x_offset;
+  int16_t blit_h = h - y_offset;
+
+  if (rotation == 0) {
+    if ((x >= 0) && (y >= 0) && ((x + blit_w) <= WIDTH) && ((y + blit_h) <= HEIGHT)) {
+#if GFX_PPA_AVAILABLE
+      if (gfx_ppa_blit_rgb565(buffer, WIDTH, HEIGHT, x, y, bitmap, w, h, x_offset, y_offset,
+                              (uint32_t)blit_w, (uint32_t)blit_h)) {
+        return;
+      }
+#endif
+    }
+  }
+
+  startWrite();
+  for (int16_t j = y_offset; j < h; j++, y++) {
+    for (int16_t i = x_offset; i < w; i++) {
+      writePixel(x + i, y, bitmap[j * w + i]);
+    }
+  }
+  endWrite();
 }
 
 /**************************************************************************/
@@ -2690,22 +2956,23 @@ void GFXcanvas16::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t 
 */
 /**************************************************************************/
 void GFXcanvas16::byteSwap(void) {
-  if (!buffer) return;
-  
+  if (!buffer)
+    return;
+
   uint32_t pixels = WIDTH * HEIGHT;
-  
+
 #if defined(ESP32)
   // ESP32 optimization: Process 32-bit words when possible
   if (pixels >= 2 && ((uintptr_t)buffer & 3) == 0) {
     uint32_t* buffer32 = (uint32_t*)buffer;
     uint32_t words = pixels / 2;
-    
+
     for (uint32_t i = 0; i < words; i++) {
       uint32_t word = buffer32[i];
       // Swap bytes in both 16-bit halves simultaneously
       buffer32[i] = ((word & 0x00FF00FF) << 8) | ((word & 0xFF00FF00) >> 8);
     }
-    
+
     // Handle odd pixel if necessary
     if (pixels & 1) {
       buffer[pixels - 1] = __builtin_bswap16(buffer[pixels - 1]);
@@ -2713,7 +2980,7 @@ void GFXcanvas16::byteSwap(void) {
     return;
   }
 #endif
-  
+
   // Standard loop for unaligned or smaller buffers
   for (uint32_t i = 0; i < pixels; i++) {
     buffer[i] = __builtin_bswap16(buffer[i]);
@@ -2857,22 +3124,23 @@ void GFXcanvas16::drawFastRawVLine(int16_t x, int16_t y, int16_t h, uint16_t col
 /**************************************************************************/
 void GFXcanvas16::drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t color) {
   // x & y already in raw (rotation 0) coordinates, no need to transform.
-  if (w <= 0) return;
-  
+  if (w <= 0)
+    return;
+
   uint32_t buffer_index = y * WIDTH + x;
-  
+
 #if defined(ESP32)
   // ESP32 optimization: Use 32-bit writes for longer lines
   if (w >= 4 && ((buffer_index & 1) == 0)) {
     uint32_t color32 = (color << 16) | color;
     uint32_t* buffer32 = (uint32_t*)(buffer + buffer_index);
     uint32_t words = w / 2;
-    
+
     // Fill in 32-bit chunks
     for (uint32_t i = 0; i < words; i++) {
       buffer32[i] = color32;
     }
-    
+
     // Handle odd pixel if necessary
     if (w & 1) {
       buffer[buffer_index + w - 1] = color;
@@ -2880,7 +3148,7 @@ void GFXcanvas16::drawFastRawHLine(int16_t x, int16_t y, int16_t w, uint16_t col
     return;
   }
 #endif
-  
+
   // Standard loop for shorter lines or unaligned cases
   for (uint32_t i = buffer_index; i < buffer_index + w; i++) {
     buffer[i] = color;

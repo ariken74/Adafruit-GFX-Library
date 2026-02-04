@@ -16,6 +16,7 @@ class Adafruit_GFX : public Print {
 
 public:
   Adafruit_GFX(int16_t w, int16_t h); // Constructor
+  virtual ~Adafruit_GFX() {}          // Virtual destructor
 
   /**********************************************************************/
   /*!
@@ -168,7 +169,7 @@ public:
 #if ARDUINO >= 100
   virtual size_t write(uint8_t);
 #else
-  virtual void write(uint8_t);
+  virtual size_t write(uint8_t);
 #endif
 
   /************************************************************************/
@@ -356,6 +357,9 @@ public:
   void drawPixel(int16_t x, int16_t y, uint16_t color);
   void fillScreen(uint16_t color);
   void fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color) override;
+  void drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w, int16_t h);
+  void drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, int16_t w, int16_t h,
+                     int16_t x_offset, int16_t y_offset);
   void byteSwap(void);
   void drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color);
   void drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color);
