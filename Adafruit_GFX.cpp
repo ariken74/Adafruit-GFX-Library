@@ -42,7 +42,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <pgmspace.h>
 #endif
 
-#if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(CONFIG_SOC_PPA_SUPPORTED)
+#if (defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)) && \
+    defined(CONFIG_SOC_PPA_SUPPORTED)
 #if __has_include("driver/ppa.h")
 #include "driver/ppa.h"
 #include "esp_err.h"
@@ -76,6 +77,7 @@ static inline bool gfx_ppa_fill_ready() {
       .oper_type = PPA_OPERATION_FILL,
       .max_pending_trans_num = 1,
       .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+      .flags = {},
   };
   return ppa_register_client(&cfg, &gfx_ppa_fill_client) == ESP_OK;
 }
@@ -88,6 +90,7 @@ static inline bool gfx_ppa_srm_ready() {
       .oper_type = PPA_OPERATION_SRM,
       .max_pending_trans_num = 1,
       .data_burst_length = PPA_DATA_BURST_LENGTH_128,
+      .flags = {},
   };
   return ppa_register_client(&cfg, &gfx_ppa_srm_client) == ESP_OK;
 }
