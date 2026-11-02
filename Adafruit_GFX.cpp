@@ -44,15 +44,10 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #if (defined(CONFIG_IDF_TARGET_ESP32P4) || defined(CONFIG_IDF_TARGET_ESP32S31)) && \
     defined(CONFIG_SOC_PPA_SUPPORTED)
-#if __has_include("driver/ppa.h")
+#if __has_include("driver/ppa.h") && __has_include("esp_cache.h")
 #include "driver/ppa.h"
 #include "esp_err.h"
-#if __has_include("esp_cache.h")
 #include "esp_cache.h"
-#endif
-#if __has_include("esp_heap_caps.h")
-#include "esp_heap_caps.h"
-#endif
 #include <stddef.h>
 #include <stdint.h>
 
@@ -95,21 +90,19 @@ static inline bool gfx_ppa_srm_ready() {
   return ppa_register_client(&cfg, &gfx_ppa_srm_client) == ESP_OK;
 }
 
-static inline bool gfx_ppa_buffer_aligned(const void* buf) {
-  return (((uintptr_t)buf & 0x3F) == 0);
+// Query the same memory-specific cache-line requirement used by the IDF PPA
+// driver. Whole-buffer alignment keeps cache maintenance inside this allocation.
+static inline bool gfx_ppa_buffer_aligned(const void* buf, size_t size) {
+  const size_t alignment = esp_cache_get_line_size_by_addr(buf);
+  return alignment == 0 ||
+         (reinterpret_cast<uintptr_t>(buf) % alignment == 0 && size % alignment == 0);
 }
 
-static inline void gfx_ppa_cache_sync(const void* buf, size_t size, bool to_device) {
-#if __has_include("esp_cache.h") && __has_include("esp_heap_caps.h")
-  if (esp_ptr_external_ram(buf)) {
-    esp_cache_msync(const_cast<void*>(buf), size,
-                    to_device ? ESP_CACHE_MSYNC_FLAG_DIR_C2M : ESP_CACHE_MSYNC_FLAG_DIR_M2C);
-  }
-#else
-  (void)buf;
-  (void)size;
-  (void)to_device;
-#endif
+static inline bool gfx_ppa_cache_sync(const void* buf, size_t size, int flags) {
+  // Internal memory may be cached too (e.g. P4). Do not limit this to PSRAM.
+  if (esp_cache_get_line_size_by_addr(buf) == 0)
+    return true;
+  return esp_cache_msync(const_cast<void*>(buf), size, flags) == ESP_OK;
 }
 
 static inline bool gfx_ppa_fill_rgb565(uint16_t* buffer, uint32_t buf_w, uint32_t buf_h, int16_t x,
@@ -117,14 +110,12 @@ static inline bool gfx_ppa_fill_rgb565(uint16_t* buffer, uint32_t buf_w, uint32_
   if (!buffer || w <= 0 || h <= 0) {
     return false;
   }
-  if (!gfx_ppa_fill_ready() || !gfx_ppa_buffer_aligned(buffer)) {
+  const size_t buffer_size = (size_t)buf_w * (size_t)buf_h * sizeof(uint16_t);
+  if (!gfx_ppa_buffer_aligned(buffer, buffer_size) || !gfx_ppa_fill_ready())
     return false;
-  }
-
-  size_t buffer_size = (size_t)buf_w * (size_t)buf_h * sizeof(uint16_t);
-  if (!gfx_ppa_buffer_aligned((void*)buffer_size)) { // Reusing macro for size check (mod 64 == 0)
+  if (!gfx_ppa_cache_sync(buffer, buffer_size,
+                          ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE))
     return false;
-  }
 
   ppa_fill_oper_config_t cfg = {};
   cfg.fill_argb_color.val = gfx_rgb565_to_argb8888(color);
@@ -140,7 +131,9 @@ static inline bool gfx_ppa_fill_rgb565(uint16_t* buffer, uint32_t buf_w, uint32_
   cfg.mode = PPA_TRANS_MODE_BLOCKING;
   cfg.user_data = NULL;
 
-  return ppa_do_fill(gfx_ppa_fill_client, &cfg) == ESP_OK;
+  const esp_err_t err = ppa_do_fill(gfx_ppa_fill_client, &cfg);
+  const bool coherent = gfx_ppa_cache_sync(buffer, buffer_size, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+  return err == ESP_OK && coherent;
 }
 
 static inline bool gfx_ppa_blit_rgb565(uint16_t* dst, uint32_t dst_w, uint32_t dst_h, int16_t dst_x,
@@ -150,17 +143,24 @@ static inline bool gfx_ppa_blit_rgb565(uint16_t* dst, uint32_t dst_w, uint32_t d
   if (!dst || !src || blit_w == 0 || blit_h == 0) {
     return false;
   }
-  if (!gfx_ppa_srm_ready() || !gfx_ppa_buffer_aligned(dst) || !gfx_ppa_buffer_aligned(src)) {
-    return false;
-  }
-
   const size_t src_bytes = (size_t)src_w * (size_t)src_h * sizeof(uint16_t);
   const size_t dst_bytes = (size_t)dst_w * (size_t)dst_h * sizeof(uint16_t);
 
-  if (!gfx_ppa_buffer_aligned((void*)src_bytes) || !gfx_ppa_buffer_aligned((void*)dst_bytes)) {
+  const uintptr_t src_start = reinterpret_cast<uintptr_t>(src);
+  const uintptr_t dst_start = reinterpret_cast<uintptr_t>(dst);
+  // SRM requires distinct buffers. Preserve the CPU path for aliased canvases.
+  if (src_start < dst_start + dst_bytes && dst_start < src_start + src_bytes)
     return false;
-  }
-  gfx_ppa_cache_sync(src, src_bytes, true);
+  if (!gfx_ppa_buffer_aligned(src, src_bytes) || !gfx_ppa_buffer_aligned(dst, dst_bytes) ||
+      !gfx_ppa_srm_ready())
+    return false;
+  if (!gfx_ppa_cache_sync(src, src_bytes, ESP_CACHE_MSYNC_FLAG_DIR_C2M))
+    return false;
+  // The driver invalidates whole destination row windows before DMA. Write
+  // back CPU drawings first, including pixels outside the copied rectangle.
+  if (!gfx_ppa_cache_sync(dst, dst_bytes,
+                          ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_INVALIDATE))
+    return false;
 
   ppa_srm_oper_config_t cfg = {};
   cfg.in.buffer = src;
@@ -193,12 +193,10 @@ static inline bool gfx_ppa_blit_rgb565(uint16_t* dst, uint32_t dst_w, uint32_t d
   cfg.user_data = NULL;
 
   esp_err_t err = ppa_do_scale_rotate_mirror(gfx_ppa_srm_client, &cfg);
-  if (err != ESP_OK) {
-    return false;
-  }
-
-  gfx_ppa_cache_sync(dst, dst_bytes, false);
-  return true;
+  // Complete the DMA-to-CPU handoff even on an operation error before the
+  // caller repairs the requested region through its existing CPU fallback.
+  const bool coherent = gfx_ppa_cache_sync(dst, dst_bytes, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+  return err == ESP_OK && coherent;
 }
 #define GFX_PPA_AVAILABLE 1
 #else
@@ -2897,6 +2895,34 @@ void GFXcanvas16::drawRGBBitmap(int16_t x, int16_t y, const uint16_t* bitmap, in
         return;
       }
 #endif
+    }
+  }
+
+  if (rotation == 0) {
+    const uintptr_t src = reinterpret_cast<uintptr_t>(bitmap);
+    const uintptr_t dst = reinterpret_cast<uintptr_t>(buffer);
+    const bool overlaps = src < dst + size_t(WIDTH) * HEIGHT * sizeof(*buffer) &&
+                          dst < src + size_t(w) * h * sizeof(*bitmap);
+    if (!overlaps) {
+      // Clip once, keeping the original source stride for cropped rows.
+      const int32_t left = max(int32_t(0), int32_t(x));
+      const int32_t top = max(int32_t(0), int32_t(y));
+      const int32_t right = min(int32_t(WIDTH), int32_t(x) + w);
+      const int32_t bottom = min(int32_t(HEIGHT), int32_t(y) + h);
+      if (right <= left || bottom <= top)
+        return;
+      const uint16_t* row = bitmap + size_t(top - y) * w + (left - x);
+      uint16_t* out = buffer + size_t(top) * WIDTH + left;
+      const size_t bytes = size_t(right - left) * sizeof(*buffer);
+      for (int32_t j = top; j < bottom; ++j) {
+        memcpy(out, row, bytes);
+        // Avoid forming pointers beyond the allocation after the last row.
+        if (j + 1 < bottom) {
+          row += w;
+          out += WIDTH;
+        }
+      }
+      return;
     }
   }
 
